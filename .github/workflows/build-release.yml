@@ -1,0 +1,124 @@
+name: Build and publish plugin
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download current Dalamud developer files
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:APPDATA "XIVLauncher\addon\Hooks\dev"
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "dalamud-latest.zip"
+          Expand-Archive -Force "dalamud-latest.zip" $destination
+
+      - name: Build release package
+        shell: pwsh
+        run: dotnet build .\LightlessAutoPair.csproj --configuration Release
+
+      - name: Locate package and read version
+        id: package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path . -Recurse -Filter latest.zip |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $zip) {
+            throw "DalamudPackager did not create latest.zip."
+          }
+
+          [xml]$project = Get-Content ".\LightlessAutoPair.csproj"
+          $version = [string]$project.Project.PropertyGroup.Version
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "No <Version> was found in LightlessAutoPair.csproj."
+          }
+
+          "zip=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightlessAutoPair-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.zip }}
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ZIP_PATH: ${{ steps.package.outputs.zip }}
+        run: |
+          $tag = "v$env:VERSION"
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $tag already exists. Increase <Version> in LightlessAutoPair.csproj before publishing again."
+          }
+
+          gh release create $tag "$env:ZIP_PATH#latest.zip" `
+            --repo "${{ github.repository }}" `
+            --title "Lightless Auto Pair $env:VERSION" `
+            --notes "Automatic Dalamud plugin build for version $env:VERSION." `
+            --latest
+
+      - name: Generate pluginmaster.json
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          $manifest = Get-Content ".\LightlessAutoPair.json" -Raw | ConvertFrom-Json
+          $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
+          $downloadUrl = "$repoUrl/releases/latest/download/latest.zip"
+          $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+
+          $entry = [ordered]@{
+            Author = $manifest.Author
+            Name = $manifest.Name
+            Punchline = $manifest.Punchline
+            Description = $manifest.Description
+            InternalName = "LightlessAutoPair"
+            AssemblyVersion = $env:VERSION
+            RepoUrl = $repoUrl
+            ApplicableVersion = $manifest.ApplicableVersion
+            DalamudApiLevel = 15
+            Tags = @($manifest.Tags)
+            DownloadLinkInstall = $downloadUrl
+            DownloadLinkUpdate = $downloadUrl
+            IsHide = $false
+            IsTestingExclusive = $false
+            LastUpdate = $timestamp
+          }
+
+          ConvertTo-Json -InputObject @($entry) -Depth 10 | Set-Content ".\pluginmaster.json" -Encoding utf8
+
+      - name: Commit repository manifest
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pluginmaster.json
+
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Publish plugin manifest for v${{ steps.package.outputs.version }}"
+            git push
+          }
