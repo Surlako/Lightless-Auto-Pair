@@ -5,7 +5,7 @@
     "Punchline": "Automatically sends pairing requests to nearby Lightfinder users with safeguards.",
     "Description": "A companion for Lightless Sync that can automatically contact nearby Lightfinder broadcasters. Includes a master toggle, a 3–30 second delay, persistent decline blacklist, pending/paired protection, status log, and automatic pause while Lightless is disconnected. Use /lightautopair for settings.",
     "InternalName": "LightlessAutoPair",
-    "AssemblyVersion": "0.1.0.0",
+    "AssemblyVersion": "0.1.1.0",
     "RepoUrl": "https://github.com/Surlako/Lightless-Auto-Pair",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
@@ -19,6 +19,6 @@
     "DownloadLinkUpdate": "https://github.com/Surlako/Lightless-Auto-Pair/releases/latest/download/latest.zip",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "LastUpdate": "1785783555"
+    "LastUpdate": "1785785126"
   }
 ]
