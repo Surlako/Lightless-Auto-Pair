@@ -11,7 +11,8 @@ namespace LightlessAutoPair;
 
 public sealed class Plugin : IDalamudPlugin
 {
-    private const string CommandName = "/lightautopair";
+    private const string CommandName = "/lap";
+    private const string LegacyCommandName = "/lightautopair";
 
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
@@ -35,6 +36,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             HelpMessage = "Open Lightless Auto Pair settings and status.",
         });
+        CommandManager.AddHandler(LegacyCommandName, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "Legacy alias for /lap.",
+        });
 
         Framework.Update += OnFrameworkUpdate;
         PluginInterface.UiBuilder.Draw += Draw;
@@ -47,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfig;
         Framework.Update -= OnFrameworkUpdate;
         CommandManager.RemoveHandler(CommandName);
+        CommandManager.RemoveHandler(LegacyCommandName);
         controller.Dispose();
     }
 

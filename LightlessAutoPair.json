@@ -2,7 +2,7 @@
   "Author": "Surlako",
   "Name": "Lightless Auto Pair",
   "Punchline": "Automatically sends pairing requests to nearby Lightfinder users with safeguards.",
-  "Description": "A companion for Lightless Sync that can automatically contact nearby Lightfinder broadcasters. Includes a master toggle, a 3\u201330 second delay, persistent decline blacklist, pending/paired protection, joined/shared syncshell protection, status log, and automatic pause while Lightless is disconnected. Use /lightautopair for settings.",
+  "Description": "A companion for Lightless Sync that can automatically contact nearby Lightfinder broadcasters. Includes a master toggle, a 3\u201330 second delay, persistent decline blacklist, pending/paired protection, joined/shared syncshell protection, status log, and automatic pause while Lightless is disconnected. Use /lap for settings. The old /lightautopair command remains available as an alias.",
   "ApplicableVersion": "any",
   "Tags": [
     "lightless",

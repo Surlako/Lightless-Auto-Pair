@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3.0
+
+- Added the shorter `/lap` command as the primary settings command.
+- Kept `/lightautopair` as a backwards-compatible legacy alias.
+
 ## 0.1.2.0
 
 - Added explicit protection for users already connected through a joined/shared syncshell.

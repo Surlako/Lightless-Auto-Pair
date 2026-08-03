@@ -17,8 +17,10 @@ A Dalamud companion plugin for **Lightless Sync** that automatically sends pairi
 Open the window with:
 
 ```text
-/lightautopair
+/lap
 ```
+
+The previous `/lightautopair` command remains available as a legacy alias.
 
 ## Compatibility target
 

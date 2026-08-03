@@ -1,20 +1,14 @@
-Lightless Auto Pair 0.1.2.0 update
+Lightless Auto Pair 0.1.3.0 update
 
-This version ignores nearby people who are already covered by a joined/shared
-syncshell. It checks both Lightless pair/group connection state and nearby
-syncshell broadcasts marked AlreadyJoined.
-
-UPDATE STEPS
+This update adds /lap as the primary command while keeping /lightautopair as a legacy alias.
 
 1. Extract this ZIP.
-2. Open:
-   https://github.com/Surlako/Lightless-Auto-Pair
+2. Open https://github.com/Surlako/Lightless-Auto-Pair
 3. Choose Add file -> Upload files.
 4. Upload all project files from this ZIP to the repository root.
 5. Commit the replacements.
 6. Open Actions -> Build and publish plugin -> Run workflow.
-7. Wait for the green checkmark and confirm release v0.1.2.0 exists.
-8. In FFXIV, open /xlplugins and update Lightless Auto Pair.
-9. Reload/restart the plugin.
+7. Wait for the green checkmark and confirm release v0.1.3.0 exists.
+8. Update Lightless Auto Pair through /xlplugins.
 
 The .github workflow does not need to be uploaded again.
