@@ -106,7 +106,8 @@ public sealed class Plugin : IDalamudPlugin
     {
         ImGui.TextUnformatted("Status");
         ImGui.BulletText($"Master toggle: {(configuration.Enabled ? "On" : "Off")}");
-        ImGui.BulletText($"Lightless loaded: {(controller.LightlessLoaded ? "Yes" : "No")}");
+        ImGui.BulletText($"Lightless detected: {(controller.LightlessDetected ? "Yes" : "No")}");
+        ImGui.BulletText($"Internal bridge ready: {(controller.LightlessLoaded ? "Yes" : "No")}");
         ImGui.BulletText($"Lightless connected: {(controller.LightlessConnected ? "Yes" : "No — automatically paused")}");
         ImGui.BulletText($"Automation state: {FormatState(controller.State)}");
         ImGui.BulletText($"Nearby Lightfinder users: {controller.NearbyCount}");

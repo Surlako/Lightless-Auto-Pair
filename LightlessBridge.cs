@@ -11,6 +11,8 @@ namespace LightlessAutoPair;
 internal sealed class LightlessBridge : IDisposable
 {
     private const string LightlessInternalName = "LightlessSync";
+    private const string LifecycleTypeName = "LightlessSync.PluginLifecycle";
+    private const string RuntimePluginTypeName = "LightlessSync.LightlessPlugin";
     private const string PlayerServiceTypeName = "LightlessSync.Services.LightFinder.LightFinderPlayerService";
     private const string ApiControllerTypeName = "LightlessSync.WebAPI.ApiController";
     private const string PairRequestServiceTypeName = "LightlessSync.Services.PairRequestService";
@@ -18,11 +20,29 @@ internal sealed class LightlessBridge : IDisposable
     private const string NotificationMessageTypeName = "LightlessSync.Services.Mediator.LightlessNotificationMessage";
     private const string SubscriberInterfaceTypeName = "LightlessSync.Services.Mediator.IMediatorSubscriber";
 
+    private static readonly string[] WrapperMemberNames =
+    {
+        "PublicInstance",
+        "Instance",
+        "PluginInstance",
+        "DalamudPlugin",
+        "LocalPlugin",
+        "Plugin",
+        "instance",
+        "pluginInstance",
+        "localPlugin",
+        "plugin",
+        "_localPlugin",
+        "_plugin",
+        "_instance",
+    };
+
     private readonly Action<LightlessNotificationEvent> notificationCallback;
 
     private object? exposedPlugin;
-    private object? pluginInstance;
-    private IServiceProvider? serviceProvider;
+    private object? lifecycleInstance;
+    private object? runtimePluginInstance;
+    private object? serviceProvider;
     private Assembly? lightlessAssembly;
     private object? playerService;
     private object? apiController;
@@ -32,12 +52,14 @@ internal sealed class LightlessBridge : IDisposable
     private Delegate? notificationHandler;
     private MethodInfo? unsubscribeMethod;
     private DateTime nextRefreshUtc = DateTime.MinValue;
+    private string providerSource = string.Empty;
 
     public LightlessBridge(Action<LightlessNotificationEvent> notificationCallback)
     {
         this.notificationCallback = notificationCallback;
     }
 
+    public bool IsDetected { get; private set; }
     public bool IsLoaded { get; private set; }
     public bool IsConnected { get; private set; }
     public string CompatibilityStatus { get; private set; } = "Lightless has not been detected yet.";
@@ -61,33 +83,51 @@ internal sealed class LightlessBridge : IDisposable
                 return false;
             }
 
-            if (!ReferenceEquals(currentExposed, exposedPlugin) || serviceProvider is null)
+            IsDetected = true;
+
+            if (!ReferenceEquals(currentExposed, exposedPlugin) || playerService is null || apiController is null)
             {
                 UnsubscribeNotifications();
                 exposedPlugin = currentExposed;
-                pluginInstance = FindPluginInstance(currentExposed);
-                if (pluginInstance is null)
+
+                var roots = FindRuntimeRoots(currentExposed);
+                lifecycleInstance = roots.Lifecycle;
+                runtimePluginInstance = roots.RuntimePlugin;
+                lightlessAssembly = roots.Assembly ?? FindLoadedLightlessAssembly();
+
+                if (lifecycleInstance is null && runtimePluginInstance is null)
                 {
-                    ResetRuntimeServices("Lightless was found, but its plugin instance is not exposed by this Dalamud build.");
+                    ResetRuntimeServices(
+                        "Lightless was detected, but its PluginLifecycle/LightlessPlugin runtime object could not be found.");
                     return false;
                 }
 
-                lightlessAssembly = pluginInstance.GetType().Assembly;
-                serviceProvider = FindServiceProvider(pluginInstance);
-                if (serviceProvider is null)
-                {
-                    ResetRuntimeServices("Lightless was found, but its internal service provider could not be resolved.");
-                    return false;
-                }
+                serviceProvider = FindKnownServiceProvider(lifecycleInstance, runtimePluginInstance, out providerSource)
+                                  ?? FindServiceProviderFromGraph(
+                                      new[] { lifecycleInstance, runtimePluginInstance },
+                                      out providerSource);
 
-                playerService = ResolveService(PlayerServiceTypeName);
-                apiController = ResolveService(ApiControllerTypeName);
-                pairRequestService = ResolveService(PairRequestServiceTypeName);
-                mediator = ResolveService(MediatorTypeName);
+                // ApiController is also held directly by LightlessPlugin, so resolve it before
+                // requiring the DI provider. This gives a reliable connection-state fallback.
+                apiController = ReflectionUtil.ReadMember(runtimePluginInstance, "_apiController", "ApiController")
+                                ?? ResolveService(ApiControllerTypeName)
+                                ?? FindReachableObjectByTypeName(ApiControllerTypeName);
+
+                playerService = ResolveService(PlayerServiceTypeName)
+                                ?? FindReachableObjectByTypeName(PlayerServiceTypeName);
+                pairRequestService = ResolveService(PairRequestServiceTypeName)
+                                     ?? FindReachableObjectByTypeName(PairRequestServiceTypeName);
+                mediator = ResolveService(MediatorTypeName)
+                           ?? FindReachableObjectByTypeName(MediatorTypeName);
 
                 if (playerService is null || apiController is null)
                 {
-                    ResetRuntimeServices("Lightless was found, but required Lightfinder services could not be resolved.");
+                    var rootsText = DescribeRoots();
+                    var providerText = serviceProvider is null
+                        ? "No compatible service provider was found."
+                        : $"Provider found via {providerSource}, but required services were unavailable.";
+                    ResetRuntimeServices(
+                        $"Lightless runtime found ({rootsText}). {providerText}");
                     return false;
                 }
 
@@ -97,7 +137,9 @@ internal sealed class LightlessBridge : IDisposable
             IsLoaded = playerService is not null && apiController is not null;
             RefreshConnectionState();
             CompatibilityStatus = IsLoaded
-                ? "Connected to Lightless internal services."
+                ? string.IsNullOrWhiteSpace(providerSource)
+                    ? "Connected to Lightless internal services."
+                    : $"Connected to Lightless internal services via {providerSource}."
                 : "Required Lightless services are unavailable.";
             return IsLoaded;
         }
@@ -182,145 +224,154 @@ internal sealed class LightlessBridge : IDisposable
 
     private object? FindInstalledLightlessPlugin()
     {
-        var installed = ReflectionUtil.ReadMember(Plugin.PluginInterface, "InstalledPlugins");
-        foreach (var candidate in ReflectionUtil.Enumerate(installed))
+        foreach (var candidate in Plugin.PluginInterface.InstalledPlugins)
         {
-            var internalName = ReflectionUtil.ReadString(candidate, "InternalName");
-            var isLoaded = ReflectionUtil.ReadBool(candidate, "IsLoaded") ?? true;
-            if (isLoaded && internalName.Equals(LightlessInternalName, StringComparison.OrdinalIgnoreCase))
+            if (candidate.IsLoaded &&
+                candidate.InternalName.Equals(LightlessInternalName, StringComparison.OrdinalIgnoreCase))
                 return candidate;
         }
 
         return null;
     }
 
-    private static object? FindPluginInstance(object exposed)
+    private static RuntimeRoots FindRuntimeRoots(object exposed)
     {
+        var queue = new Queue<(object Value, int Depth)>();
         var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        return FindPluginInstanceRecursive(exposed, 0, visited);
+        queue.Enqueue((exposed, 0));
+
+        object? lifecycle = null;
+        object? runtimePlugin = null;
+        Assembly? assembly = null;
+        var inspected = 0;
+
+        while (queue.Count > 0 && inspected < 2500)
+        {
+            var (value, depth) = queue.Dequeue();
+            if (!ShouldInspect(value) || !visited.Add(value))
+                continue;
+
+            inspected++;
+            var type = value.GetType();
+            var fullName = type.FullName ?? string.Empty;
+            if (IsLightlessAssembly(type.Assembly))
+            {
+                assembly ??= type.Assembly;
+                if (fullName.Equals(LifecycleTypeName, StringComparison.Ordinal))
+                    lifecycle = value;
+                else if (fullName.Equals(RuntimePluginTypeName, StringComparison.Ordinal))
+                    runtimePlugin = value;
+            }
+
+            if (lifecycle is not null && runtimePlugin is null)
+            {
+                var directRuntime = ReflectionUtil.ReadMember(
+                    lifecycle,
+                    "_lightlessPlugin",
+                    "LightlessPlugin");
+                if (directRuntime?.GetType().FullName == RuntimePluginTypeName)
+                    runtimePlugin = directRuntime;
+            }
+
+            if (lifecycle is not null && runtimePlugin is not null)
+                break;
+            if (depth >= 8)
+                continue;
+
+            foreach (var child in EnumerateGraphChildren(value))
+            {
+                if (ShouldInspect(child))
+                    queue.Enqueue((child, depth + 1));
+            }
+        }
+
+        return new RuntimeRoots(lifecycle, runtimePlugin, assembly);
     }
 
-    private static object? FindPluginInstanceRecursive(
-        object? value,
-        int depth,
-        HashSet<object> visited)
+    private static object? FindKnownServiceProvider(
+        object? lifecycle,
+        object? runtimePlugin,
+        out string source)
     {
-        if (value is null || depth > 4)
-            return null;
-        if (IsLightlessObject(value))
-            return value;
+        source = string.Empty;
 
-        var type = value.GetType();
-        if (type.IsPrimitive || type.IsEnum || value is string || value is Delegate || value is Task)
-            return null;
-        if (!type.IsValueType && !visited.Add(value))
-            return null;
-
-        var knownNames = new[]
+        var runtimeScope = ReflectionUtil.ReadMember(
+            runtimePlugin,
+            "_runtimeServiceScope",
+            "RuntimeServiceScope");
+        var provider = ReflectionUtil.ReadMember(runtimeScope, "ServiceProvider", "Services");
+        if (IsServiceProviderLike(provider))
         {
-            "PublicInstance",
-            "Instance",
-            "PluginInstance",
-            "DalamudPlugin",
-            "Plugin",
-            "instance",
-            "plugin",
-            "localPlugin",
-            "_plugin",
-            "_instance",
-        };
-
-        foreach (var name in knownNames)
-        {
-            var child = ReflectionUtil.ReadMember(value, name);
-            var found = FindPluginInstanceRecursive(child, depth + 1, visited);
-            if (found is not null)
-                return found;
+            source = "LightlessPlugin._runtimeServiceScope.ServiceProvider";
+            return provider;
         }
 
-        // Dalamud's public IExposedPlugin intentionally hides the plugin instance. Its concrete
-        // wrapper has changed between API versions, so inspect only plugin/instance-shaped members.
-        foreach (var property in type.GetProperties(ReflectionUtil.AllInstance))
+        var host = ReflectionUtil.ReadMember(lifecycle, "_host", "Host");
+        provider = ReflectionUtil.ReadMember(host, "Services", "ServiceProvider");
+        if (IsServiceProviderLike(provider))
         {
-            if (property.GetIndexParameters().Length != 0 ||
-                (!property.Name.Contains("plugin", StringComparison.OrdinalIgnoreCase) &&
-                 !property.Name.Contains("instance", StringComparison.OrdinalIgnoreCase)))
-                continue;
-
-            try
-            {
-                var found = FindPluginInstanceRecursive(property.GetValue(value), depth + 1, visited);
-                if (found is not null)
-                    return found;
-            }
-            catch
-            {
-                // Ignore loader properties that are unavailable during plugin reload.
-            }
+            source = "PluginLifecycle._host.Services";
+            return provider;
         }
 
-        foreach (var field in type.GetFields(ReflectionUtil.AllInstance))
+        provider = ReflectionUtil.ReadMember(runtimePlugin, "Services", "ServiceProvider");
+        if (IsServiceProviderLike(provider))
         {
-            if (!field.Name.Contains("plugin", StringComparison.OrdinalIgnoreCase) &&
-                !field.Name.Contains("instance", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            try
-            {
-                var found = FindPluginInstanceRecursive(field.GetValue(value), depth + 1, visited);
-                if (found is not null)
-                    return found;
-            }
-            catch
-            {
-                // Ignore volatile loader fields.
-            }
+            source = "LightlessPlugin.ServiceProvider";
+            return provider;
         }
 
         return null;
     }
 
-    private static bool IsLightlessObject(object? value)
-        => value?.GetType().Assembly.GetName().Name?.Equals("LightlessSync", StringComparison.OrdinalIgnoreCase) == true;
-
-    private static IServiceProvider? FindServiceProvider(object root)
+    private static object? FindServiceProviderFromGraph(
+        IEnumerable<object?> roots,
+        out string source)
     {
+        source = string.Empty;
+        var queue = new Queue<(object Value, int Depth, string Path)>();
         var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        return FindServiceProviderRecursive(root, 0, visited);
-    }
 
-    private static IServiceProvider? FindServiceProviderRecursive(
-        object? value,
-        int depth,
-        HashSet<object> visited)
-    {
-        if (value is null || depth > 5)
-            return null;
-        if (value is IServiceProvider provider)
-            return provider;
-        if (!value.GetType().IsValueType && !visited.Add(value))
-            return null;
+        foreach (var root in roots.Where(root => root is not null))
+            queue.Enqueue((root!, 0, root!.GetType().Name));
 
-        var services = ReflectionUtil.ReadMember(value, "Services", "ServiceProvider");
-        if (services is IServiceProvider direct)
-            return direct;
-
-        var knownChildren = new[]
+        var inspected = 0;
+        while (queue.Count > 0 && inspected < 2500)
         {
-            "_host",
-            "_lightlessPlugin",
-            "_runtimeServiceScope",
-            "_serviceScopeFactory",
-            "Host",
-            "Plugin",
-        };
+            var (value, depth, path) = queue.Dequeue();
+            if (!ShouldInspect(value) || !visited.Add(value))
+                continue;
 
-        foreach (var name in knownChildren)
-        {
-            var child = ReflectionUtil.ReadMember(value, name);
-            var found = FindServiceProviderRecursive(child, depth + 1, visited);
-            if (found is not null)
-                return found;
+            inspected++;
+            if (IsServiceProviderLike(value))
+            {
+                source = path;
+                return value;
+            }
+
+            var direct = ReflectionUtil.ReadMember(value, "ServiceProvider", "Services");
+            if (IsServiceProviderLike(direct))
+            {
+                source = $"{path}.ServiceProvider";
+                return direct;
+            }
+
+            if (depth >= 7)
+                continue;
+
+            foreach (var child in EnumerateGraphChildren(value))
+            {
+                if (!ShouldInspect(child))
+                    continue;
+
+                var childAssembly = child.GetType().Assembly.GetName().Name ?? string.Empty;
+                if (!IsLightlessAssembly(child.GetType().Assembly) &&
+                    !childAssembly.StartsWith("Microsoft.Extensions.", StringComparison.Ordinal) &&
+                    !childAssembly.StartsWith("Dalamud", StringComparison.Ordinal))
+                    continue;
+
+                queue.Enqueue((child, depth + 1, $"{path}->{child.GetType().Name}"));
+            }
         }
 
         return null;
@@ -329,7 +380,186 @@ internal sealed class LightlessBridge : IDisposable
     private object? ResolveService(string fullTypeName)
     {
         var type = lightlessAssembly?.GetType(fullTypeName, false, false);
-        return type is null ? null : serviceProvider?.GetService(type);
+        if (type is null || serviceProvider is null)
+            return null;
+
+        try
+        {
+            if (serviceProvider is IServiceProvider provider)
+                return provider.GetService(type);
+
+            var providerInterface = serviceProvider.GetType().GetInterfaces()
+                .FirstOrDefault(candidate =>
+                    candidate.FullName == typeof(IServiceProvider).FullName);
+            var interfaceMethod = providerInterface?.GetMethod(nameof(IServiceProvider.GetService));
+            if (interfaceMethod is not null)
+                return interfaceMethod.Invoke(serviceProvider, new object?[] { type });
+
+            var directMethod = serviceProvider.GetType().GetMethods(ReflectionUtil.AllInstance)
+                .FirstOrDefault(candidate =>
+                    (candidate.Name == nameof(IServiceProvider.GetService) ||
+                     candidate.Name.EndsWith($".{nameof(IServiceProvider.GetService)}", StringComparison.Ordinal)) &&
+                    candidate.GetParameters().Length == 1 &&
+                    candidate.GetParameters()[0].ParameterType == typeof(Type));
+            return directMethod?.Invoke(serviceProvider, new object?[] { type });
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Verbose(ex, "Could not resolve Lightless service {ServiceType} from {ProviderSource}.",
+                fullTypeName,
+                providerSource);
+            return null;
+        }
+    }
+
+    private object? FindReachableObjectByTypeName(string fullTypeName)
+    {
+        var queue = new Queue<(object Value, int Depth)>();
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        if (lifecycleInstance is not null)
+            queue.Enqueue((lifecycleInstance, 0));
+        if (runtimePluginInstance is not null)
+            queue.Enqueue((runtimePluginInstance, 0));
+
+        var inspected = 0;
+        while (queue.Count > 0 && inspected < 3500)
+        {
+            var (value, depth) = queue.Dequeue();
+            if (!ShouldInspect(value) || !visited.Add(value))
+                continue;
+
+            inspected++;
+            if (value.GetType().FullName == fullTypeName)
+                return value;
+            if (depth >= 8)
+                continue;
+
+            foreach (var child in EnumerateGraphChildren(value))
+            {
+                if (!ShouldInspect(child))
+                    continue;
+
+                var assemblyName = child.GetType().Assembly.GetName().Name ?? string.Empty;
+                if (IsLightlessAssembly(child.GetType().Assembly) ||
+                    assemblyName.StartsWith("Microsoft.Extensions.", StringComparison.Ordinal) ||
+                    assemblyName.StartsWith("Dalamud", StringComparison.Ordinal))
+                    queue.Enqueue((child, depth + 1));
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<object> EnumerateGraphChildren(object value)
+    {
+        var yielded = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        foreach (var name in WrapperMemberNames)
+        {
+            var child = ReflectionUtil.ReadMember(value, name);
+            if (child is not null && yielded.Add(child))
+                yield return child;
+        }
+
+        for (var current = value.GetType(); current is not null; current = current.BaseType)
+        {
+            FieldInfo[] fields;
+            try
+            {
+                fields = current.GetFields(
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic |
+                    BindingFlags.DeclaredOnly);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var field in fields)
+            {
+                object? child;
+                try
+                {
+                    child = field.GetValue(value);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (child is not null && yielded.Add(child))
+                    yield return child;
+            }
+        }
+
+        if (value is IEnumerable enumerable && value is not string)
+        {
+            var count = 0;
+            IEnumerator? enumerator = null;
+            try
+            {
+                enumerator = enumerable.GetEnumerator();
+                while (count++ < 100 && enumerator.MoveNext())
+                {
+                    var child = enumerator.Current;
+                    if (child is not null && yielded.Add(child))
+                        yield return child;
+                }
+            }
+            finally
+            {
+                (enumerator as IDisposable)?.Dispose();
+            }
+        }
+    }
+
+    private static bool ShouldInspect(object? value)
+    {
+        if (value is null || value is string || value is Delegate || value is Task ||
+            value is Type || value is Assembly || value is MemberInfo)
+            return false;
+
+        var type = value.GetType();
+        return !type.IsPrimitive && !type.IsEnum && !type.IsPointer;
+    }
+
+    private static bool IsServiceProviderLike(object? value)
+    {
+        if (value is null)
+            return false;
+        if (value is IServiceProvider)
+            return true;
+
+        var type = value.GetType();
+        if (type.GetInterfaces().Any(candidate =>
+                candidate.FullName == typeof(IServiceProvider).FullName))
+            return true;
+
+        return type.GetMethods(ReflectionUtil.AllInstance).Any(candidate =>
+            (candidate.Name == nameof(IServiceProvider.GetService) ||
+             candidate.Name.EndsWith($".{nameof(IServiceProvider.GetService)}", StringComparison.Ordinal)) &&
+            candidate.GetParameters().Length == 1 &&
+            candidate.GetParameters()[0].ParameterType == typeof(Type));
+    }
+
+    private static bool IsLightlessAssembly(Assembly assembly)
+        => assembly.GetName().Name?.Equals("LightlessSync", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static Assembly? FindLoadedLightlessAssembly()
+        => AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(IsLightlessAssembly);
+
+    private string DescribeRoots()
+    {
+        var roots = new List<string>();
+        if (lifecycleInstance is not null)
+            roots.Add(lifecycleInstance.GetType().FullName ?? lifecycleInstance.GetType().Name);
+        if (runtimePluginInstance is not null)
+            roots.Add(runtimePluginInstance.GetType().FullName ?? runtimePluginInstance.GetType().Name);
+        return roots.Count == 0 ? "none" : string.Join(", ", roots);
     }
 
     private HashSet<string> GetIncomingRequestHashes()
@@ -408,7 +638,8 @@ internal sealed class LightlessBridge : IDisposable
             subscriberProxy = null;
             notificationHandler = null;
             unsubscribeMethod = null;
-            Plugin.Log.Warning(ex, "Could not subscribe to Lightless notifications. Declines may need manual blacklist management.");
+            Plugin.Log.Warning(ex,
+                "Could not subscribe to Lightless notifications. Declines may need manual blacklist management.");
         }
     }
 
@@ -468,8 +699,10 @@ internal sealed class LightlessBridge : IDisposable
     private void ResetBridge(string status)
     {
         exposedPlugin = null;
-        pluginInstance = null;
+        lifecycleInstance = null;
+        runtimePluginInstance = null;
         lightlessAssembly = null;
+        IsDetected = false;
         ResetRuntimeServices(status);
     }
 
@@ -477,6 +710,7 @@ internal sealed class LightlessBridge : IDisposable
     {
         UnsubscribeNotifications();
         serviceProvider = null;
+        providerSource = string.Empty;
         playerService = null;
         apiController = null;
         pairRequestService = null;
@@ -491,4 +725,9 @@ internal sealed class LightlessBridge : IDisposable
         UnsubscribeNotifications();
         ResetBridge("Disposed.");
     }
+
+    private sealed record RuntimeRoots(
+        object? Lifecycle,
+        object? RuntimePlugin,
+        Assembly? Assembly);
 }

@@ -22,7 +22,7 @@ Open the window with:
 
 ## Compatibility target
 
-The initial reflection bridge was designed from **Lightless Sync 3.2.3.0** on **Dalamud API 15**. Lightless currently does not expose Lightfinder pairing over public IPC, so this plugin accesses its internal services by reflection. A Lightless update can require a compatibility update here.
+The reflection bridge targets **Lightless Sync 3.2.3.0** on **Dalamud API 15**. Version 0.1.1.0 adds exact runtime-root discovery and active service-scope resolution for the current Lightless host layout. Lightless currently does not expose Lightfinder pairing over public IPC, so this plugin accesses its internal services by reflection. A Lightless update can require a compatibility update here.
 
 ## Decline detection
 

@@ -42,6 +42,7 @@ internal sealed class AutoPairController : IDisposable
     public int NearbyCount { get; private set; }
     public int EligibleCount { get; private set; }
     public string CompatibilityStatus => bridge.CompatibilityStatus;
+    public bool LightlessDetected => bridge.IsDetected;
     public bool LightlessLoaded => bridge.IsLoaded;
     public bool LightlessConnected => bridge.IsConnected;
 
