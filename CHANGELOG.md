@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2.0
+
+- Added explicit protection for users already connected through a joined/shared syncshell.
+- Added detection of nearby syncshell broadcasts marked `AlreadyJoined` by Lightless.
+- Added fallback inspection of Lightless pair/group connection state.
+- Added a status counter showing how many nearby users were ignored because of syncshell coverage.
+
 ## 0.1.1.0
 
 - Fixed Lightless Sync 3.2.3.0 runtime discovery when Dalamud exposes a non-root Lightless object first.

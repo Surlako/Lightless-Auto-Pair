@@ -14,6 +14,7 @@ internal sealed class LightlessBridge : IDisposable
     private const string LifecycleTypeName = "LightlessSync.PluginLifecycle";
     private const string RuntimePluginTypeName = "LightlessSync.LightlessPlugin";
     private const string PlayerServiceTypeName = "LightlessSync.Services.LightFinder.LightFinderPlayerService";
+    private const string SyncshellServiceTypeName = "LightlessSync.Services.LightFinder.LightFinderSyncshellService";
     private const string ApiControllerTypeName = "LightlessSync.WebAPI.ApiController";
     private const string PairRequestServiceTypeName = "LightlessSync.Services.PairRequestService";
     private const string MediatorTypeName = "LightlessSync.Services.Mediator.LightlessMediator";
@@ -45,6 +46,7 @@ internal sealed class LightlessBridge : IDisposable
     private object? serviceProvider;
     private Assembly? lightlessAssembly;
     private object? playerService;
+    private object? syncshellService;
     private object? apiController;
     private object? pairRequestService;
     private object? mediator;
@@ -115,6 +117,8 @@ internal sealed class LightlessBridge : IDisposable
 
                 playerService = ResolveService(PlayerServiceTypeName)
                                 ?? FindReachableObjectByTypeName(PlayerServiceTypeName);
+                syncshellService = ResolveService(SyncshellServiceTypeName)
+                                   ?? FindReachableObjectByTypeName(SyncshellServiceTypeName);
                 pairRequestService = ResolveService(PairRequestServiceTypeName)
                                      ?? FindReachableObjectByTypeName(PairRequestServiceTypeName);
                 mediator = ResolveService(MediatorTypeName)
@@ -160,6 +164,7 @@ internal sealed class LightlessBridge : IDisposable
         {
             var rawPlayers = ReflectionUtil.InvokeNoArgs(playerService, "GetNearbyPlayers");
             var incomingRequestHashes = GetIncomingRequestHashes();
+            var joinedSyncshellBroadcasters = GetJoinedSyncshellBroadcasterKeys();
             var result = new List<NearbyPlayer>();
 
             foreach (var raw in ReflectionUtil.Enumerate(rawPlayers))
@@ -169,8 +174,20 @@ internal sealed class LightlessBridge : IDisposable
                     continue;
 
                 var pair = ReflectionUtil.ReadMember(raw, "Pair");
+                var isDirectlyPaired = ReflectionUtil.ReadBool(pair, "IsDirectlyPaired") ?? false;
                 var isPaired = pair is not null &&
-                    (ReflectionUtil.ReadBool(pair, "IsPaired", "IsDirectlyPaired") ?? true);
+                    (ReflectionUtil.ReadBool(pair, "IsPaired") ?? isDirectlyPaired);
+
+                // Lightless treats syncshell membership as a persistent connection even when
+                // the users are not directly paired. Detect that connection explicitly, and
+                // also detect broadcasters whose nearby syncshell card says AlreadyJoined.
+                var hasPersistentConnection =
+                    ReflectionUtil.ReadBool(pair, "HasPersistentConnection") ?? false;
+                var hasGroupMembership = HasGroupMembership(pair);
+                var connectedThroughSharedSyncshell =
+                    pair is not null &&
+                    !isDirectlyPaired &&
+                    (isPaired || hasPersistentConnection || hasGroupMembership);
 
                 var pairStatus = ReflectionUtil.ReadString(pair, "IndividualPairStatus", "Status");
                 var statusLooksPending = pairStatus.Contains("pending", StringComparison.OrdinalIgnoreCase) ||
@@ -179,6 +196,11 @@ internal sealed class LightlessBridge : IDisposable
                 var displayName = ReflectionUtil.ReadString(raw, "DisplayName");
                 var name = ReflectionUtil.ReadString(raw, "Name");
                 var world = ReflectionUtil.ReadString(raw, "World");
+                var broadcastsJoinedSyncshell = MatchesPlayerIdentity(
+                    joinedSyncshellBroadcasters,
+                    displayName,
+                    name,
+                    world);
 
                 result.Add(new NearbyPlayer
                 {
@@ -188,6 +210,8 @@ internal sealed class LightlessBridge : IDisposable
                     World = world,
                     DisplayName = displayName,
                     IsPaired = isPaired,
+                    IsCoveredByJoinedSyncshell =
+                        connectedThroughSharedSyncshell || broadcastsJoinedSyncshell,
                     HasLightlessPendingRequest = incomingRequestHashes.Contains(hashedCid) || statusLooksPending,
                 });
             }
@@ -562,6 +586,114 @@ internal sealed class LightlessBridge : IDisposable
         return roots.Count == 0 ? "none" : string.Join(", ", roots);
     }
 
+    private HashSet<string> GetJoinedSyncshellBroadcasterKeys()
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (syncshellService is null)
+            return result;
+
+        try
+        {
+            var nearbySyncshells = ReflectionUtil.InvokeNoArgs(
+                syncshellService,
+                "GetNearbySyncshells");
+
+            foreach (var raw in ReflectionUtil.Enumerate(nearbySyncshells))
+            {
+                if (ReflectionUtil.ReadBool(raw, "AlreadyJoined") != true)
+                    continue;
+
+                AddIdentityKey(
+                    result,
+                    ReflectionUtil.ReadString(raw, "BroadcasterName"));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Failure here must never stop ordinary player pairing. The Pair object fallback
+            // still protects users who are already connected through a shared syncshell.
+            Plugin.Log.Verbose(ex, "Could not inspect already-joined nearby syncshells.");
+        }
+
+        return result;
+    }
+
+    private static bool HasGroupMembership(object? pair)
+    {
+        if (pair is null)
+            return false;
+
+        var userPair = ReflectionUtil.ReadMember(pair, "UserPair");
+        return HasAnyItems(ReflectionUtil.ReadMember(
+                   userPair,
+                   "Groups",
+                   "GroupPairs",
+                   "GroupPairPermissions",
+                   "GroupPermissions")) ||
+               HasAnyItems(ReflectionUtil.ReadMember(
+                   pair,
+                   "Groups",
+                   "GroupPairs"));
+    }
+
+    private static bool HasAnyItems(object? value)
+    {
+        if (value is null || value is string || value is not IEnumerable enumerable)
+            return false;
+
+        IEnumerator? enumerator = null;
+        try
+        {
+            enumerator = enumerable.GetEnumerator();
+            return enumerator.MoveNext();
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            (enumerator as IDisposable)?.Dispose();
+        }
+    }
+
+    private static bool MatchesPlayerIdentity(
+        HashSet<string> joinedSyncshellBroadcasters,
+        string displayName,
+        string name,
+        string world)
+    {
+        if (joinedSyncshellBroadcasters.Count == 0)
+            return false;
+
+        var candidates = new[]
+        {
+            displayName,
+            string.IsNullOrWhiteSpace(world) ? name : $"{name} @ {world}",
+            string.IsNullOrWhiteSpace(world) ? name : $"{name}@{world}",
+            name,
+        };
+
+        return candidates
+            .Select(NormalizeIdentityKey)
+            .Any(candidate =>
+                candidate.Length > 0 &&
+                joinedSyncshellBroadcasters.Contains(candidate));
+    }
+
+    private static void AddIdentityKey(HashSet<string> target, string value)
+    {
+        var normalized = NormalizeIdentityKey(value);
+        if (normalized.Length > 0)
+            target.Add(normalized);
+    }
+
+    private static string NormalizeIdentityKey(string value)
+        => new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToUpperInvariant)
+            .ToArray());
+
     private HashSet<string> GetIncomingRequestHashes()
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -712,6 +844,7 @@ internal sealed class LightlessBridge : IDisposable
         serviceProvider = null;
         providerSource = string.Empty;
         playerService = null;
+        syncshellService = null;
         apiController = null;
         pairRequestService = null;
         mediator = null;

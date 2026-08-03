@@ -22,6 +22,7 @@ internal sealed class NearbyPlayer
     public string World { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
     public bool IsPaired { get; init; }
+    public bool IsCoveredByJoinedSyncshell { get; init; }
     public bool HasLightlessPendingRequest { get; init; }
 
     public string FriendlyName

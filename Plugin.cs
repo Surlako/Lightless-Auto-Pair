@@ -89,7 +89,7 @@ public sealed class Plugin : IDalamudPlugin
             changed = true;
         }
 
-        ImGui.TextDisabled("The master toggle defaults to off. Only nearby Lightfinder broadcasters are considered.");
+        ImGui.TextDisabled("The master toggle defaults to off. Users already covered by a joined/shared syncshell are ignored.");
 
         var delay = Math.Clamp(configuration.DelaySeconds, 3, 30);
         if (ImGui.SliderInt("Delay between requests", ref delay, 3, 30, "%d seconds"))
@@ -111,6 +111,7 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.BulletText($"Lightless connected: {(controller.LightlessConnected ? "Yes" : "No — automatically paused")}");
         ImGui.BulletText($"Automation state: {FormatState(controller.State)}");
         ImGui.BulletText($"Nearby Lightfinder users: {controller.NearbyCount}");
+        ImGui.BulletText($"Ignored through joined/shared syncshells: {controller.JoinedSyncshellIgnoredCount}");
         ImGui.BulletText($"Eligible now: {controller.EligibleCount}");
         ImGui.BulletText($"Outgoing requests tracked as pending: {controller.PendingCount}");
         ImGui.TextWrapped(controller.CompatibilityStatus);

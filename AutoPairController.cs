@@ -40,6 +40,7 @@ internal sealed class AutoPairController : IDisposable
 
     public AutoPairState State { get; private set; } = AutoPairState.Disabled;
     public int NearbyCount { get; private set; }
+    public int JoinedSyncshellIgnoredCount { get; private set; }
     public int EligibleCount { get; private set; }
     public string CompatibilityStatus => bridge.CompatibilityStatus;
     public bool LightlessDetected => bridge.IsDetected;
@@ -104,9 +105,11 @@ internal sealed class AutoPairController : IDisposable
 
             var nearby = bridge.GetNearbyPlayers();
             NearbyCount = nearby.Count;
+            JoinedSyncshellIgnoredCount = nearby.Count(player => player.IsCoveredByJoinedSyncshell);
             ResolveAcceptedRequests(nearby);
 
             var eligible = nearby
+                .Where(player => !player.IsCoveredByJoinedSyncshell)
                 .Where(player => !player.IsPaired)
                 .Where(player => !player.HasLightlessPendingRequest)
                 .Where(player => !IsLocallyPending(player.HashedCid))
