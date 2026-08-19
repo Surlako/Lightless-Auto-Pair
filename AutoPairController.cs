@@ -19,6 +19,7 @@ internal sealed class AutoPairController : IDisposable
     private DateTime nextUpdateUtc = DateTime.MinValue;
     private DateTime lastRequestUtc = DateTime.MinValue;
     private AutoPairState lastReportedState = (AutoPairState)(-1);
+    private bool statusWasVisible;
     private bool disposed;
 
     public AutoPairController(Configuration configuration)
@@ -56,15 +57,25 @@ internal sealed class AutoPairController : IDisposable
         }
     }
 
-    public void OnFrameworkUpdate()
+    public void OnFrameworkUpdate(bool statusVisible)
     {
-        if (disposed || DateTime.UtcNow < nextUpdateUtc)
+        if (statusVisible && !statusWasVisible)
+            nextUpdateUtc = DateTime.MinValue;
+        statusWasVisible = statusVisible;
+
+        var now = DateTime.UtcNow;
+        if (disposed || now < nextUpdateUtc)
             return;
         if (updateTask is { IsCompleted: false })
             return;
 
-        nextUpdateUtc = DateTime.UtcNow.AddMilliseconds(500);
-        updateTask = UpdateAsync();
+        var intervalMilliseconds = configuration.Enabled
+            ? 500
+            : statusVisible
+                ? 1000
+                : 5000;
+        nextUpdateUtc = now.AddMilliseconds(intervalMilliseconds);
+        updateTask = UpdateAsync(statusVisible);
     }
 
     public IReadOnlyList<StatusLogEntry> GetLogSnapshot()
@@ -96,14 +107,24 @@ internal sealed class AutoPairController : IDisposable
         AddLog(LogKind.Info, string.Empty, "Persistent outgoing-pending tracker cleared manually.");
     }
 
-    private async Task UpdateAsync()
+    private async Task UpdateAsync(bool statusVisible)
     {
         try
         {
             bridge.Refresh();
             ProcessNotifications();
 
-            var nearby = bridge.GetNearbyPlayers();
+            var shouldReadNearby = configuration.Enabled || statusVisible || PendingCount > 0;
+            if (!shouldReadNearby)
+            {
+                NearbyCount = 0;
+                JoinedSyncshellIgnoredCount = 0;
+                EligibleCount = 0;
+                SetState(AutoPairState.Disabled, "Automatic pairing is disabled.");
+                return;
+            }
+
+            var nearby = bridge.GetNearbyPlayers(refresh: false);
             NearbyCount = nearby.Count;
             JoinedSyncshellIgnoredCount = nearby.Count(player => player.IsCoveredByJoinedSyncshell);
             ResolveAcceptedRequests(nearby);

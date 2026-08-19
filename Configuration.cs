@@ -13,11 +13,29 @@ public sealed class Configuration : IPluginConfiguration
     public List<BlacklistEntry> DeclinedBlacklist { get; set; } = new();
     public List<PendingRequest> OutgoingPendingRequests { get; set; } = new();
 
-    public void Normalize()
+    public bool Normalize()
     {
-        DelaySeconds = Math.Clamp(DelaySeconds, 3, 30);
-        DeclinedBlacklist ??= new List<BlacklistEntry>();
-        OutgoingPendingRequests ??= new List<PendingRequest>();
+        var changed = false;
+        var normalizedDelay = Math.Clamp(DelaySeconds, 3, 30);
+        if (DelaySeconds != normalizedDelay)
+        {
+            DelaySeconds = normalizedDelay;
+            changed = true;
+        }
+
+        if (DeclinedBlacklist is null)
+        {
+            DeclinedBlacklist = new List<BlacklistEntry>();
+            changed = true;
+        }
+
+        if (OutgoingPendingRequests is null)
+        {
+            OutgoingPendingRequests = new List<PendingRequest>();
+            changed = true;
+        }
+
+        return changed;
     }
 
     public bool IsBlacklisted(string hashedCid)

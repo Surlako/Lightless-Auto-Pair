@@ -155,9 +155,9 @@ internal sealed class LightlessBridge : IDisposable
         }
     }
 
-    public IReadOnlyList<NearbyPlayer> GetNearbyPlayers()
+    public IReadOnlyList<NearbyPlayer> GetNearbyPlayers(bool refresh = true)
     {
-        if (!Refresh() || playerService is null)
+        if ((refresh && !Refresh()) || !IsLoaded || playerService is null)
             return Array.Empty<NearbyPlayer>();
 
         try

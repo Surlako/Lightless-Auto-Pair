@@ -24,8 +24,9 @@ jobs:
         run: |
           $destination = Join-Path $env:APPDATA "XIVLauncher\addon\Hooks\dev"
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
-          Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "dalamud-latest.zip"
-          Expand-Archive -Force "dalamud-latest.zip" $destination
+          $archive = Join-Path $env:RUNNER_TEMP "dalamud-latest.zip"
+          Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile $archive
+          Expand-Archive -Force $archive $destination
 
       - name: Build release package
         shell: pwsh
@@ -54,7 +55,7 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LightlessAutoPair-${{ steps.package.outputs.version }}
           path: ${{ steps.package.outputs.zip }}
@@ -87,7 +88,7 @@ jobs:
         run: |
           $manifest = Get-Content ".\LightlessAutoPair.json" -Raw | ConvertFrom-Json
           $repoUrl = "${{ github.server_url }}/${{ github.repository }}"
-          $downloadUrl = "$repoUrl/releases/latest/download/latest.zip"
+          $downloadUrl = "$repoUrl/releases/download/v$env:VERSION/latest.zip"
           $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
 
           $entry = [ordered]@{

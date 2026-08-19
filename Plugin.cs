@@ -27,8 +27,8 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        configuration.Normalize();
-        configuration.Save();
+        if (configuration.Normalize())
+            configuration.Save();
 
         controller = new AutoPairController(configuration);
 
@@ -56,7 +56,7 @@ public sealed class Plugin : IDalamudPlugin
         controller.Dispose();
     }
 
-    private void OnFrameworkUpdate(IFramework framework) => controller.OnFrameworkUpdate();
+    private void OnFrameworkUpdate(IFramework framework) => controller.OnFrameworkUpdate(windowOpen);
     private void OnCommand(string command, string arguments) => windowOpen = !windowOpen;
     private void OpenConfig() => windowOpen = true;
 

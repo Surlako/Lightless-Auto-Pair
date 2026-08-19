@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4.0
+
+- Makes disabled, closed-window operation genuinely idle with a five-second health check.
+- Skips nearby-player reflection scans while disabled unless status or pending-request tracking needs them.
+- Avoids a duplicate bridge refresh during each nearby-player scan.
+- Caches reflection metadata through unload-safe weak type caches.
+- Uses immutable versioned release links for cache-safe updates.
+
 ## 0.1.3.0
 
 - Added the shorter `/lap` command as the primary settings command.
